@@ -1,0 +1,85 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model Task {
+  id               String    @id @default(uuid())
+  title            String
+  description      String?
+  status           String    @default("TODO") // TODO, IN_PROGRESS, DONE
+  priority         String    @default("MEDIUM") // LOW, MEDIUM, HIGH
+  startTime        DateTime?
+  endTime          DateTime?
+  recurrenceRule   String?
+  estimatedMinutes Int?
+  actualMinutes    Int?
+  completedAt      DateTime?
+  projectId        String?
+  project          Project?      @relation(fields: [projectId], references: [id])
+  sessions         TaskSession[]
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+}
+
+model TaskSession {
+  id        String   @id @default(uuid())
+  taskId    String
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  startTime DateTime
+  endTime   DateTime
+}
+
+model Project {
+  id    String @id @default(uuid())
+  name  String
+  color String
+  tasks Task[]
+}
+
+model Journal {
+  id           String   @id @default(uuid())
+  date         DateTime @unique
+  reflection   String?
+  blockers     String?
+  tomorrowPlan String?
+}
+
+model Event {
+  id        String   @id @default(uuid())
+  type      String
+  content   String
+  timestamp DateTime @default(now())
+}
+
+model Conversation {
+  id        String   @id @default(uuid())
+  role      String   // user or assistant
+  message   String
+  timestamp DateTime @default(now())
+}
+
+model Settings {
+  id        String @id @default(uuid())
+  workStart String @default("09:00")
+  workEnd   String @default("17:00")
+  theme     String @default("dark")
+}
+
+// Real app-usage samples for focus-hours tracking, written by the standalone
+// scripts/track-usage.mjs poller (not by the Next.js server itself).
+model UsageSample {
+  id          String   @id @default(uuid())
+  appName     String
+  windowTitle String?
+  kind        String // "foreground" (on-screen, what the poll counted as focus) or "background" (seen running but not focused)
+  timestamp   DateTime @default(now())
+
+  @@index([timestamp])
+}

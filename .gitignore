@@ -39,3 +39,21 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+/src/generated/prisma
+
+# local database (personal data, machine-specific)
+*.db
+*.db-journal
+
+# runtime logs / scratch scripts
+chat-error.log
+test-chat.js
+
+# local dev diary - not meant for the shared repo
+docs/error-log.md
+
+# AI coding-assistant tooling (local config/skills, not app source)
+.claude/
+.agents/
+.windsurf/
