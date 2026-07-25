@@ -1,18 +1,21 @@
 "use client"
 
+import { useState } from "react"
 import { useTasks, TaskWithSessions } from "@/hooks/use-tasks"
 import { useUsage } from "@/hooks/use-usage"
 import { useUIStore } from "@/hooks/use-ui-store"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Progress } from "@/components/ui/progress"
 import { Button } from "@/components/ui/button"
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { FocusByHourChart } from "@/components/focus-by-hour-chart"
-import { CheckCircle2, Clock, CalendarDays, TrendingUp, Plus, Pencil, AlertCircle } from "lucide-react"
+import { CheckCircle2, Clock, ListTodo, TrendingUp, Plus, Pencil, AlertCircle } from "lucide-react"
 
 export default function Dashboard() {
   const { tasks, isLoading, updateTask } = useTasks()
   const { data: usage } = useUsage()
   const { openCreateTaskModal, openEditTaskModal } = useUIStore()
+  const [listView, setListView] = useState<null | "completed" | "pending">(null)
 
   if (isLoading) {
     return (
@@ -91,7 +94,10 @@ export default function Dashboard() {
       </div>
 
       <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4 animate-in fade-in slide-in-from-bottom-4 duration-700">
-        <Card className="bg-gradient-to-br from-indigo-500/15 to-purple-500/15 border-indigo-500/30 backdrop-blur-xl shadow-lg hover:shadow-indigo-500/10 transition-all duration-300">
+        <Card
+          onClick={() => setListView("completed")}
+          className="cursor-pointer bg-gradient-to-br from-indigo-500/15 to-purple-500/15 border-indigo-500/30 backdrop-blur-xl shadow-lg hover:shadow-indigo-500/10 transition-all duration-300"
+        >
           <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0">
             <CardTitle className="text-sm font-semibold tracking-wide uppercase text-indigo-200">Tasks Completed</CardTitle>
             <div className="p-2 bg-indigo-500/20 rounded-full">
@@ -130,16 +136,19 @@ export default function Dashboard() {
           </CardContent>
         </Card>
 
-        <Card className="bg-card/50 backdrop-blur-sm border-white/10 shadow-lg hover:shadow-xl hover:bg-card/80 transition-all duration-300">
+        <Card
+          onClick={() => setListView("pending")}
+          className="cursor-pointer bg-card/50 backdrop-blur-sm border-white/10 shadow-lg hover:shadow-xl hover:bg-card/80 transition-all duration-300"
+        >
           <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0">
-            <CardTitle className="text-sm font-semibold tracking-wide uppercase text-muted-foreground">Upcoming Meetings</CardTitle>
+            <CardTitle className="text-sm font-semibold tracking-wide uppercase text-muted-foreground">Pending Tasks</CardTitle>
             <div className="p-2 bg-muted rounded-full">
-              <CalendarDays className="h-5 w-5 text-muted-foreground" />
+              <ListTodo className="h-5 w-5 text-muted-foreground" />
             </div>
           </CardHeader>
           <CardContent>
-            <div className="text-4xl font-bold">2</div>
-            <p className="text-sm text-muted-foreground mt-1">Next one in 45m</p>
+            <div className="text-4xl font-bold">{activeTasks.length}</div>
+            <p className="text-sm text-muted-foreground mt-1">Not yet completed</p>
           </CardContent>
         </Card>
       </div>
@@ -217,11 +226,36 @@ export default function Dashboard() {
           </CardContent>
         </Card>
       </div>
+
+      <Dialog open={listView !== null} onOpenChange={(open) => !open && setListView(null)}>
+        <DialogContent className="sm:max-w-[500px] max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>{listView === "completed" ? "Completed Tasks" : "Pending Tasks"}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 pt-2">
+            {(listView === "completed" ? completedTasks : activeTasks).length === 0 ? (
+              <p className="text-sm text-muted-foreground text-center py-8">
+                {listView === "completed" ? "No completed tasks yet." : "Nothing pending. You're all caught up."}
+              </p>
+            ) : (
+              (listView === "completed" ? completedTasks : activeTasks).map(task => (
+                <TaskRow
+                  key={task.id}
+                  task={task}
+                  done={listView === "completed"}
+                  onToggleDone={() => updateTask.mutate({ id: task.id, status: listView === "completed" ? "TODO" : "DONE" })}
+                  onEdit={() => { setListView(null); openEditTaskModal(task) }}
+                />
+              ))
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
 
-function TaskRow({ task, overdue, onToggleDone, onEdit }: { task: TaskWithSessions, overdue?: boolean, onToggleDone: () => void, onEdit: () => void }) {
+function TaskRow({ task, overdue, done, onToggleDone, onEdit }: { task: TaskWithSessions, overdue?: boolean, done?: boolean, onToggleDone: () => void, onEdit: () => void }) {
   return (
     <div className={`group flex items-center justify-between p-4 rounded-xl border transition-all duration-200 ${overdue ? "border-amber-500/30 bg-amber-500/5 hover:bg-amber-500/10" : "border-border/50 bg-background/50 hover:bg-accent/80 hover:scale-[1.01] hover:shadow-md"}`}>
       <div className="flex items-center space-x-4">
@@ -229,7 +263,7 @@ function TaskRow({ task, overdue, onToggleDone, onEdit }: { task: TaskWithSessio
           <input
             type="checkbox"
             className="peer h-5 w-5 rounded-full border-2 border-muted-foreground/50 text-primary focus:ring-primary focus:ring-offset-background transition-all cursor-pointer appearance-none checked:bg-primary checked:border-primary"
-            checked={false}
+            checked={!!done}
             onChange={onToggleDone}
           />
           <CheckCircle2 className="absolute w-3.5 h-3.5 text-primary-foreground opacity-0 peer-checked:opacity-100 pointer-events-none transition-opacity" />
