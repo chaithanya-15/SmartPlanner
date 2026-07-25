@@ -65,7 +65,13 @@ export function useTasks(start?: string, end?: string) {
   })
 
   const updateTask = useMutation({
-    mutationFn: async (task: Partial<TaskWithSessions> & { id: string; sessions?: { startTime: string | Date; endTime: string | Date }[]; confirmOverlap?: boolean }) => {
+    mutationFn: async (
+      task: Omit<Partial<TaskWithSessions>, "sessions"> & {
+        id: string
+        sessions?: { startTime: string | Date; endTime: string | Date }[]
+        confirmOverlap?: boolean
+      }
+    ) => {
       const res = await fetch(`/api/tasks/${task.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },

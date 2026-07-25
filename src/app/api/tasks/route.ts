@@ -11,22 +11,13 @@ export async function GET(request: Request) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const where: any = {}
     
-    // Support filtering by date range for calendar
+    // Support filtering by date range for calendar. This needs to be a real
+    // overlap check (startTime < end AND endTime > start) - matching only
+    // "starts in range" or "ends in range" separately drops any task that
+    // spans clean over the whole queried range (e.g. an all-day block).
     if (start && end) {
-      where.OR = [
-        {
-          startTime: {
-            gte: new Date(start),
-            lte: new Date(end),
-          },
-        },
-        {
-          endTime: {
-            gte: new Date(start),
-            lte: new Date(end),
-          },
-        },
-      ]
+      where.startTime = { lt: new Date(end) }
+      where.endTime = { gt: new Date(start) }
     }
 
     const tasks = await prisma.task.findMany({
@@ -56,7 +47,20 @@ export async function POST(request: Request) {
     let endTime = body.endTime ? new Date(body.endTime) : null
     
     type SessionInput = { startTime: string; endTime: string }
-    
+
+    const invertedBlock = sessions.find(
+      (s: SessionInput) => new Date(s.endTime).getTime() <= new Date(s.startTime).getTime()
+    )
+    if (invertedBlock) {
+      return NextResponse.json(
+        { error: "A time block's end time must be after its start time." },
+        { status: 400 }
+      )
+    }
+    if (startTime && endTime && endTime.getTime() <= startTime.getTime()) {
+      return NextResponse.json({ error: "End time must be after start time." }, { status: 400 })
+    }
+
     if (sessions.length > 0) {
       if (!startTime) startTime = new Date(Math.min(...sessions.map((s: SessionInput) => new Date(s.startTime).getTime())))
       if (!endTime) endTime = new Date(Math.max(...sessions.map((s: SessionInput) => new Date(s.endTime).getTime())))

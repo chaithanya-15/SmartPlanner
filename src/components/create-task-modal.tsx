@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react"
 import { useTasks, ConflictError, ConflictInfo } from "@/hooks/use-tasks"
 import { useUIStore } from "@/hooks/use-ui-store"
+import { taskToastManager } from "@/lib/toast-manager"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -28,11 +29,21 @@ export function CreateTaskModal() {
   const [sessions, setSessions] = useState<SessionRow[]>([])
   const [conflict, setConflict] = useState<ConflictInfo[] | null>(null)
   const [confirmingDelete, setConfirmingDelete] = useState(false)
+  const [formError, setFormError] = useState<string | null>(null)
+
+  // A conflict check only reflects the times shown when it fired - if the
+  // user then edits a field, "Schedule anyway" would otherwise bypass
+  // validation for times the server never actually checked. Clear it so any
+  // further submit re-validates against the current (edited) values.
+  const invalidateStaleConflict = () => {
+    if (conflict) setConflict(null)
+  }
 
   useEffect(() => {
     if (!isTaskModalOpen) return
     setConflict(null)
     setConfirmingDelete(false)
+    setFormError(null)
 
     if (editingTask) {
       setTitle(editingTask.title)
@@ -69,6 +80,7 @@ export function CreateTaskModal() {
   }, [isTaskModalOpen, createTaskDefaults, editingTask])
 
   const addSession = () => {
+    invalidateStaleConflict()
     const now = new Date()
     now.setMinutes(0, 0, 0)
     const nextHour = new Date(now.getTime() + 60 * 60000)
@@ -81,10 +93,12 @@ export function CreateTaskModal() {
   }
 
   const removeSession = (id: string) => {
+    invalidateStaleConflict()
     setSessions(sessions.filter(s => s.id !== id))
   }
 
   const updateSession = (id: string, field: "startTime"|"endTime", value: string) => {
+    invalidateStaleConflict()
     setSessions(sessions.map(s => s.id === id ? { ...s, [field]: value } : s))
   }
 
@@ -120,10 +134,19 @@ export function CreateTaskModal() {
   const handleSubmit = (e: React.FormEvent, confirmOverlap = false) => {
     e.preventDefault()
     setConflict(null)
+    setFormError(null)
+
+    const invertedBlock = sessions.find((s) => new Date(s.endTime).getTime() <= new Date(s.startTime).getTime())
+    if (invertedBlock) {
+      setFormError("A time block's end time must be after its start time.")
+      return
+    }
 
     const onError = (err: Error) => {
       if (err instanceof ConflictError) {
         setConflict(err.conflictingTasks)
+      } else {
+        setFormError(err.message || "Something went wrong saving this task. Please try again.")
       }
     }
 
@@ -135,7 +158,23 @@ export function CreateTaskModal() {
     } else {
       createTask.mutate(
         { status: "TODO", ...buildPayload(confirmOverlap) },
-        { onSuccess: handleSuccess, onError }
+        {
+          onSuccess: (created) => {
+            handleSuccess()
+            taskToastManager.add({
+              title: "Task created",
+              description: created?.title ?? title,
+              timeout: 8000,
+              actionProps: {
+                children: "Undo",
+                onClick: () => {
+                  if (created?.id) deleteTask.mutate(created.id)
+                },
+              },
+            })
+          },
+          onError,
+        }
       )
     }
   }
@@ -160,7 +199,7 @@ export function CreateTaskModal() {
           <div className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="title">Task Title</Label>
-              <Input id="title" value={title} onChange={e => setTitle(e.target.value)} placeholder="What needs to be done?" required autoFocus />
+              <Input id="title" value={title} onChange={e => { invalidateStaleConflict(); setTitle(e.target.value) }} placeholder="What needs to be done?" required autoFocus />
             </div>
             <div className="space-y-2">
               <Label htmlFor="priority">Priority</Label>
@@ -208,6 +247,13 @@ export function CreateTaskModal() {
               ))}
             </div>
           </div>
+
+          {formError && (
+            <div className="flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+              <p>{formError}</p>
+            </div>
+          )}
 
           {conflict && (
             <div className="space-y-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-4">

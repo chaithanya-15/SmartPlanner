@@ -18,6 +18,7 @@ import { AppSidebar } from "@/components/app-sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryProvider } from "@/components/query-provider";
 import { CreateTaskModal } from "@/components/create-task-modal";
+import { Toaster } from "@/components/toaster";
 
 export const metadata: Metadata = {
   title: "Smart Planner",
@@ -51,6 +52,7 @@ export default function RootLayout({
                   </div>
                 </main>
                 <CreateTaskModal />
+                <Toaster />
               </SidebarProvider>
             </TooltipProvider>
           </QueryProvider>

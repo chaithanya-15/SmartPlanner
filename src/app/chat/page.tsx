@@ -3,7 +3,7 @@
 import { useChat } from "@ai-sdk/react"
 import { useRef, useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
-import { Send, Bot, Sparkles, User, Wrench, AlertCircle, Clock, Loader2 } from "lucide-react"
+import { Send, Bot, Sparkles, User, Wrench, AlertCircle, Clock, Loader2, Trash2 } from "lucide-react"
 import { OLLAMA_MODEL_LABEL } from "@/lib/ai-config"
 
 type ToolCallDisplay = {
@@ -16,9 +16,11 @@ function ToolCallBadge({ toolName, state }: ToolCallDisplay) {
     createTask: "Creating task",
     updateTask: "Updating task",
     moveTask: "Moving task",
+    deleteTask: "Deleting task",
     searchTasks: "Searching tasks",
     dailySummary: "Summarising day",
     planTomorrow: "Planning tomorrow",
+    analyzeSchedule: "Checking free time",
   }
   return (
     <div className="flex items-center gap-2 py-2 px-3 rounded-md bg-primary/10 border border-primary/20 text-xs text-primary w-fit">
@@ -79,7 +81,27 @@ export default function ChatPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const [elapsed, setElapsed] = useState(0)
 
-  const { messages, status, error, sendMessage } = useChat({})
+  const { messages, status, error, sendMessage, setMessages } = useChat({})
+  const [isClearing, setIsClearing] = useState(false)
+
+  const handleClearChat = async () => {
+    if (messages.length === 0) return
+    if (!window.confirm("Clear the whole conversation? This can't be undone.")) return
+
+    setIsClearing(true)
+    try {
+      // Clears the server-side history too - the API re-injects it into the
+      // system prompt on every turn, so clearing only the visible messages
+      // here would let the old conversation leak right back in next message.
+      await fetch("/api/chat", { method: "DELETE" })
+    } catch {
+      // Non-fatal: worst case the next reply has stale memory context: still
+      // clear the visible transcript either way.
+    } finally {
+      setMessages([])
+      setIsClearing(false)
+    }
+  }
 
   // Timer for AI thinking
   useEffect(() => {
@@ -118,16 +140,28 @@ export default function ChatPage() {
     <div className="flex flex-col h-full max-w-3xl mx-auto px-4 pb-6">
       {/* Header */}
       <div className="py-6 border-b border-border mb-4">
-        <div className="flex items-center gap-3">
-          <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center">
-            <Sparkles className="h-5 w-5 text-white" />
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center">
+              <Sparkles className="h-5 w-5 text-white" />
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold tracking-tight">AI Assistant</h1>
+              <p className="text-sm text-muted-foreground">
+                Powered by {OLLAMA_MODEL_LABEL} · 100% local · Zero data sent externally
+              </p>
+            </div>
           </div>
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight">AI Assistant</h1>
-            <p className="text-sm text-muted-foreground">
-              Powered by {OLLAMA_MODEL_LABEL} · 100% local · Zero data sent externally
-            </p>
-          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleClearChat}
+            disabled={isClearing || messages.length === 0}
+            className="shrink-0"
+          >
+            <Trash2 className="h-4 w-4 mr-1.5" />
+            Clear chat
+          </Button>
         </div>
       </div>
 

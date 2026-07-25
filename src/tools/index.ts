@@ -15,6 +15,38 @@ const TIME_FIELD_DESCRIPTION =
   "When this should happen. Pass an ISO 8601 datetime, or the time phrase the user actually said (e.g. '10pm today', '3:30pm tomorrow', 'in 30 minutes'). Do NOT do the date math yourself — pass the phrase through and it will be resolved against the real current time."
 
 /**
+ * Fuzzy-matches a task by title. Returns exactly one task, or a structured
+ * "no match" / "ambiguous" result so callers never silently act on the
+ * wrong task when more than one shares a word (e.g. "Call mom" vs "Call
+ * dentist" both matching "call").
+ */
+async function findUniqueTaskByTitle(titleSearch: string, { excludeDone = false } = {}) {
+  const matches = await prisma.task.findMany({
+    where: {
+      title: { contains: titleSearch },
+      ...(excludeDone && { status: { not: "DONE" } }),
+    },
+    orderBy: { updatedAt: "desc" },
+    include: { sessions: true },
+  })
+
+  if (matches.length === 0) {
+    return { task: null, error: { success: false, message: `No task found matching "${titleSearch}".` } }
+  }
+  if (matches.length > 1) {
+    return {
+      task: null,
+      error: {
+        success: false,
+        ambiguous: true,
+        message: `Multiple tasks match "${titleSearch}": ${matches.map((t) => t.title).join(", ")}. Ask the user which one they mean before doing anything — do not guess.`,
+      },
+    }
+  }
+  return { task: matches[0], error: null }
+}
+
+/**
  * Tool: createTask
  * Creates a new task in the database from natural language input.
  */
@@ -74,6 +106,10 @@ export const createTask = tool({
         end = addMinutes(start, durationMinutes ?? estimatedMinutes ?? 60)
       }
 
+      if (end.getTime() <= start.getTime()) {
+        return { success: false, message: "The end time must be after the start time. Ask the user to clarify." }
+      }
+
       const conflicts = await findOverlappingTasks(start, end)
       if (conflicts.length > 0 && !confirmOverlap) {
         return {
@@ -121,19 +157,8 @@ export const updateTask = tool({
   }),
   // @ts-expect-error type inference mismatch
   execute: async ({ titleSearch, status, priority, title }) => {
-    // Fuzzy search: find the task whose title contains the search string
-    const task = await prisma.task.findFirst({
-      where: {
-        title: { contains: titleSearch },
-        status: { not: "DONE" },
-      },
-      orderBy: { updatedAt: "desc" },
-      include: { sessions: true },
-    })
-
-    if (!task) {
-      return { success: false, message: `No active task found matching "${titleSearch}".` }
-    }
+    const { task, error } = await findUniqueTaskByTitle(titleSearch, { excludeDone: true })
+    if (!task) return error
 
     // On completion, derive real actual time from scheduled sessions when
     // available instead of just copying the estimate.
@@ -191,14 +216,8 @@ export const moveTask = tool({
   }),
   // @ts-expect-error type inference mismatch
   execute: async ({ titleSearch, startTime, endTime, durationMinutes, confirmOverlap }) => {
-    const task = await prisma.task.findFirst({
-      where: { title: { contains: titleSearch } },
-      orderBy: { updatedAt: "desc" },
-    })
-
-    if (!task) {
-      return { success: false, message: `No task found matching "${titleSearch}".` }
-    }
+    const { task, error } = await findUniqueTaskByTitle(titleSearch, { excludeDone: true })
+    if (!task) return error
 
     const start = resolveDateTime(startTime)
     if (!start) {
@@ -218,6 +237,10 @@ export const moveTask = tool({
       end = addMinutes(start, durationMinutes ?? task.estimatedMinutes ?? 60)
     }
 
+    if (end.getTime() <= start.getTime()) {
+      return { success: false, message: "The end time must be after the start time. Ask the user to clarify." }
+    }
+
     const conflicts = await findOverlappingTasks(start, end, task.id)
     if (conflicts.length > 0 && !confirmOverlap) {
       return {
@@ -228,12 +251,44 @@ export const moveTask = tool({
       }
     }
 
+    // Replace any existing session blocks with the single new time - chat
+    // doesn't support specifying multiple blocks, so "move X to 3pm" means
+    // the task now lives at exactly one place, not many. This also keeps
+    // Task.startTime/endTime and TaskSession in sync so the calendar (which
+    // prefers sessions when present) actually reflects the move.
     const updated = await prisma.task.update({
       where: { id: task.id },
-      data: { startTime: start, endTime: end, estimatedMinutes: Math.round((end.getTime() - start.getTime()) / 60000) },
+      data: {
+        startTime: start,
+        endTime: end,
+        estimatedMinutes: Math.round((end.getTime() - start.getTime()) / 60000),
+        sessions: { deleteMany: {}, create: [{ startTime: start, endTime: end }] },
+      },
     })
 
     return JSON.parse(JSON.stringify({ success: true, task: updated }))
+  },
+})
+
+/**
+ * Tool: deleteTask
+ * Permanently removes a task. Also what powers "undo" via chat, since
+ * without this the assistant had no way to remove anything it (or the
+ * user) created.
+ */
+export const deleteTask = tool({
+  description:
+    "Permanently delete a task. Use this when the user asks to remove, delete, cancel, or undo the creation of a task.",
+  parameters: z.object({
+    titleSearch: z.string().describe("Part of the task title to search for"),
+  }),
+  // @ts-expect-error type inference mismatch
+  execute: async ({ titleSearch }) => {
+    const { task, error } = await findUniqueTaskByTitle(titleSearch)
+    if (!task) return error
+
+    await prisma.task.delete({ where: { id: task.id } })
+    return { success: true, deletedTitle: task.title }
   },
 })
 
@@ -324,11 +379,11 @@ export const dailySummary = tool({
 
 /**
  * Tool: planTomorrow
- * Schedules remaining tasks into tomorrow's time slots.
+ * Schedules pending, not-yet-scheduled tasks into tomorrow's open time slots.
  */
 export const planTomorrow = tool({
   description:
-    "Plan tomorrow's schedule. Takes all pending high-priority tasks and schedules them into time slots starting from work hours tomorrow.",
+    "Plan tomorrow's schedule. Takes pending tasks that don't already have a scheduled time (highest priority first) and places them into open slots starting from work hours tomorrow, skipping past anything already booked instead of double-booking it.",
   parameters: z.object({
     workStartHour: z
       .number()
@@ -337,8 +392,11 @@ export const planTomorrow = tool({
   }),
   // @ts-expect-error type inference mismatch
   execute: async ({ workStartHour }) => {
+    // Only tasks with no time at all - anything already scheduled (e.g. a
+    // fixed appointment saved as a normal task) is left alone rather than
+    // silently clobbered with a new slot.
     const pendingTasks = await prisma.task.findMany({
-      where: { status: { not: "DONE" } },
+      where: { status: { not: "DONE" }, startTime: null },
       orderBy: [{ priority: "desc" }, { createdAt: "asc" }],
       take: 8,
     })
@@ -347,13 +405,34 @@ export const planTomorrow = tool({
     tomorrow.setDate(tomorrow.getDate() + 1)
     tomorrow.setHours(workStartHour, 0, 0, 0)
 
+    const dayEnd = new Date(tomorrow)
+    dayEnd.setHours(23, 0, 0, 0)
+
     const schedule: Array<{ task: string; start: string; end: string }> = []
+    const skipped: string[] = []
     let cursor = new Date(tomorrow)
 
     for (const task of pendingTasks) {
       const durationMs = (task.estimatedMinutes || 60) * 60 * 1000
-      const start = new Date(cursor)
-      const end = new Date(cursor.getTime() + durationMs)
+      let start = new Date(cursor)
+      let end = new Date(start.getTime() + durationMs)
+
+      // Nudge past anything already occupying this slot rather than
+      // scheduling directly on top of it (this is the check that was
+      // missing entirely before - createTask/moveTask already had it).
+      for (let attempts = 0; attempts < 10; attempts++) {
+        const conflicts = await findOverlappingTasks(start, end)
+        if (conflicts.length === 0) break
+        const ends = conflicts.map((c) => c.endTime).filter((d): d is Date => d !== null)
+        const latestEnd = ends.length > 0 ? new Date(Math.max(...ends.map((d) => new Date(d).getTime()))) : end
+        start = new Date(latestEnd.getTime() + 15 * 60000)
+        end = new Date(start.getTime() + durationMs)
+      }
+
+      if (start.getTime() >= dayEnd.getTime()) {
+        skipped.push(task.title)
+        continue
+      }
 
       await prisma.task.update({
         where: { id: task.id },
@@ -370,7 +449,7 @@ export const planTomorrow = tool({
       cursor = new Date(end.getTime() + 15 * 60 * 1000)
     }
 
-    return { schedule, date: tomorrow.toDateString() }
+    return { schedule, skipped, date: tomorrow.toDateString() }
   },
 })
 
@@ -388,15 +467,23 @@ export const analyzeSchedule = tool({
   }),
   // @ts-expect-error type inference mismatch
   execute: async ({ date, startHour, endHour }) => {
-    const targetDate = new Date(date)
+    // A bare "YYYY-MM-DD" is parsed by `new Date()` as UTC midnight, not
+    // local midnight - for negative UTC-offset timezones that silently
+    // shifts the analyzed day back by one. Parse the date parts explicitly.
+    const dateOnlyMatch = date.match(/^(\d{4})-(\d{2})-(\d{2})/)
+    const targetDate = dateOnlyMatch
+      ? new Date(Number(dateOnlyMatch[1]), Number(dateOnlyMatch[2]) - 1, Number(dateOnlyMatch[3]))
+      : new Date(date)
     targetDate.setHours(0, 0, 0, 0)
     const nextDay = new Date(targetDate)
     nextDay.setDate(nextDay.getDate() + 1)
 
+    // Overlap query (not just "starts within the day") so a task spanning
+    // midnight into the target day is still counted as busy time.
     const tasks = await prisma.task.findMany({
       where: {
-        startTime: { not: null, gte: targetDate, lt: nextDay },
-        endTime: { not: null },
+        startTime: { not: null, lt: nextDay },
+        endTime: { not: null, gt: targetDate },
       },
       orderBy: { startTime: "asc" },
     })

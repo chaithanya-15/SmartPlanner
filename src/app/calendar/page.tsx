@@ -83,25 +83,50 @@ export default function CalendarPage() {
     )
   }
 
+  // A dragged/resized event on the calendar is either a specific
+  // TaskSession block (has sessionId) or a whole task with no blocks at all
+  // (fallback render path). For the former, the *entire* sessions array
+  // must be sent - the PUT route replaces all of a task's sessions and
+  // recomputes startTime/endTime from them, so patching only the top-level
+  // fields here would silently desync from what's actually rendered.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const buildReschedulePayload = (info: any) => {
+    const taskId = info.event.extendedProps.taskId || info.event.id
+    const sessionId = info.event.extendedProps.sessionId
+    const newStart = info.event.start?.toISOString()
+    const newEnd = info.event.end?.toISOString()
+
+    if (sessionId) {
+      const task = tasks.find((t) => t.id === taskId)
+      const existingSessions = task?.sessions || []
+      const sessions = existingSessions.map((s) =>
+        s.id === sessionId
+          ? { startTime: newStart, endTime: newEnd }
+          : { startTime: s.startTime, endTime: s.endTime }
+      )
+      const estimatedMinutes = sessions.reduce(
+        (acc, s) => acc + (new Date(s.endTime).getTime() - new Date(s.startTime).getTime()) / 60000,
+        0
+      )
+      return { taskId, data: { sessions, estimatedMinutes: Math.round(estimatedMinutes) } }
+    }
+
+    const estimatedMinutes = info.event.end && info.event.start
+      ? Math.round((info.event.end.getTime() - info.event.start.getTime()) / 60000)
+      : undefined
+    return { taskId, data: { startTime: newStart, endTime: newEnd, estimatedMinutes } }
+  }
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleEventDrop = (info: any) => {
-    // If it's a session, we'd ideally update just the session. For now, we fallback to updating task if no session.
-    // Full session editing requires a new API endpoint, but we can do a simplified version here.
-    const taskId = info.event.extendedProps.taskId || info.event.id
-    rescheduleWithConflictConfirm(taskId, {
-      startTime: info.event.start?.toISOString(),
-      endTime: info.event.end?.toISOString(),
-    }, () => info.revert())
+    const { taskId, data } = buildReschedulePayload(info)
+    rescheduleWithConflictConfirm(taskId, data, () => info.revert())
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleEventResize = (info: any) => {
-    const taskId = info.event.extendedProps.taskId || info.event.id
-    rescheduleWithConflictConfirm(taskId, {
-      startTime: info.event.start?.toISOString(),
-      endTime: info.event.end?.toISOString(),
-      estimatedMinutes: Math.round((info.event.end.getTime() - info.event.start.getTime()) / 60000)
-    }, () => info.revert())
+    const { taskId, data } = buildReschedulePayload(info)
+    rescheduleWithConflictConfirm(taskId, data, () => info.revert())
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

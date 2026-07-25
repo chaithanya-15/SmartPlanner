@@ -26,6 +26,10 @@ model Task {
   sessions         TaskSession[]
   createdAt        DateTime      @default(now())
   updatedAt        DateTime      @updatedAt
+
+  @@index([status])
+  @@index([startTime])
+  @@index([endTime])
 }
 
 model TaskSession {
@@ -34,6 +38,8 @@ model TaskSession {
   task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
   startTime DateTime
   endTime   DateTime
+
+  @@index([taskId])
 }
 
 model Project {
@@ -63,6 +69,8 @@ model Conversation {
   role      String   // user or assistant
   message   String
   timestamp DateTime @default(now())
+
+  @@index([timestamp])
 }
 
 model Settings {

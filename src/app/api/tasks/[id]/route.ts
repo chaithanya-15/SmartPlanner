@@ -29,6 +29,15 @@ export async function PUT(
       // task's existing sessions. Check each block individually, same as
       // the create flow, since one block can conflict while others don't.
       const sessions: SessionInput[] = body.sessions || []
+
+      const invertedBlock = sessions.find((s) => new Date(s.endTime).getTime() <= new Date(s.startTime).getTime())
+      if (invertedBlock) {
+        return NextResponse.json(
+          { error: "A time block's end time must be after its start time." },
+          { status: 400 }
+        )
+      }
+
       if (sessions.length > 0) {
         startTime = new Date(Math.min(...sessions.map((s) => new Date(s.startTime).getTime())))
         endTime = new Date(Math.max(...sessions.map((s) => new Date(s.endTime).getTime())))
@@ -55,8 +64,20 @@ export async function PUT(
         }
       }
     } else if (isRescheduling) {
-      startTime = body.startTime ? new Date(body.startTime) : null
-      endTime = body.endTime ? new Date(body.endTime) : null
+      // A caller may only send one of startTime/endTime (e.g. dragging just
+      // the edge of an event). Merge with the existing value for whichever
+      // key wasn't sent instead of nulling it out - that was the landmine:
+      // `body.endTime ? ... : null` used to wipe endTime whenever only
+      // startTime was present in the request.
+      startTime = "startTime" in body ? (body.startTime ? new Date(body.startTime) : null) : existing.startTime
+      endTime = "endTime" in body ? (body.endTime ? new Date(body.endTime) : null) : existing.endTime
+
+      if (startTime && endTime && endTime.getTime() <= startTime.getTime()) {
+        return NextResponse.json(
+          { error: "End time must be after start time." },
+          { status: 400 }
+        )
+      }
 
       if (startTime && endTime) {
         const conflicts = await findOverlappingTasks(startTime, endTime, id)
